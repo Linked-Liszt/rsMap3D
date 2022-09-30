@@ -9,3 +9,6 @@ test_out
 .vscode
 
 check_open_mp/test_openmp
+*/mlruns
+*config.json
+*time.log

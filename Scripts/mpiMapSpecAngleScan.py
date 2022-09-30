@@ -28,8 +28,13 @@ from mpi4py.futures import MPICommExecutor
 mpiComm = MPI.COMM_WORLD
 mpiRank = mpiComm.Get_rank()
 
+MLFLOW_EXP = "Destroid Gridsearch"
+
 def parseArgs():
     parser = argparse.ArgumentParser(description='Default MPI run script. Expects a json config file pointed at the data.')
+    parser.add_argument('num_threads',
+                        type=int,
+                        help='number of threads for XRU')
     parser.add_argument('configPath', 
                         nargs='?', 
                         default=os.path.join(os.getcwd(), 'config.json'),
@@ -37,6 +42,7 @@ def parseArgs():
     return parser.parse_args()
 
 args = parseArgs()
+
 
 def updateDataSourceProgress(value1, value2):
     print("DataSource Progress %s/%s" % (value1, value2))
@@ -49,9 +55,14 @@ with open(args.configPath, 'r') as config_f:
 
 
 if mpiRank == 0:
+    os.environ["OMP_NUM_THREADS"] = str(args.num_threads)
+    import mlflow
+    mlflow.set_experiment(MLFLOW_EXP)
+    mlflow.start_run()
+    mlflow.log_param('thread_count', args.num_threads)
+    mlflow.log_param('proc_count', mpiComm.Get_size())
+    mlflow.log_artifact(args.configPath)
     startTime = datetime.datetime.now()
-    with open('time.log', 'a') as time_log:
-        time_log.write(f'Start: {startTime}\n')
 
 
 #
@@ -123,8 +134,12 @@ ds.setCurrentDetector(detectorName)
 ds.loadSource(mapHKL=mapHKL)
 
 if mpiRank == 0:
+    loadTime = datetime.datetime.now()
+    mlflow.log_metric('load_time', (loadTime - startTime).total_seconds() / 60)
     with open('time.log', 'a') as time_log:
-        time_log.write(f'Source Load Time: {datetime.datetime.now()}\n')
+        time_log.write(f'Source Load Time: {loadTime}\n')
+    
+    
 
 ds.setRangeBounds(ds.getOverallRanges())
 imageToBeUsed = ds.getImageToBeUsed()
@@ -144,7 +159,10 @@ gridMapper.setProgressUpdater(updateMapperProgress)
 gridMapper.doMap()
 
 if mpiRank == 0:
+    endTime = datetime.datetime.now()
+    mlflow.log_metric('full_time', (endTime - startTime).total_seconds() / 60)
+    mlflow.log_metric('grid_time', (endTime - loadTime).total_seconds() / 60)
+    mlflow.end_run()
     with open('time.log', 'a') as time_log:
-        endTime = datetime.datetime.now()
         time_log.write(f'End: {endTime}\n')
         time_log.write(f'Diff: {endTime - startTime}\n')
