@@ -1,3 +1,11 @@
 # .gitignore for rsMap3D
 *.pyc
 .DS_Store
+
+build
+*.egg-info
+
+test_out
+.vscode
+
+check_open_mp/test_openmp
