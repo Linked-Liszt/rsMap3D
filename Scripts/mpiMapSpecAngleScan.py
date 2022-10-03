@@ -28,10 +28,11 @@ from mpi4py.futures import MPICommExecutor
 mpiComm = MPI.COMM_WORLD
 mpiRank = mpiComm.Get_rank()
 
-MLFLOW_EXP = "Destroid Gridsearch"
 
 def parseArgs():
     parser = argparse.ArgumentParser(description='Default MPI run script. Expects a json config file pointed at the data.')
+    parser.add_argument('exp_name',
+                        help='experiment name for mlflow logging')
     parser.add_argument('num_threads',
                         type=int,
                         help='number of threads for XRU')
@@ -57,7 +58,7 @@ with open(args.configPath, 'r') as config_f:
 if mpiRank == 0:
     os.environ["OMP_NUM_THREADS"] = str(args.num_threads)
     import mlflow
-    mlflow.set_experiment(MLFLOW_EXP)
+    mlflow.set_experiment(args.exp_name)
     mlflow.start_run()
     mlflow.log_param('thread_count', args.num_threads)
     mlflow.log_param('proc_count', mpiComm.Get_size())

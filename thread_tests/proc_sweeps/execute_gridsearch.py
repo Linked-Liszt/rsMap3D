@@ -6,5 +6,6 @@ for num_proc in range(1, 7):
                     '-n', 
                     str(num_proc), 
                     'python', 
-                    '../Scripts/mpiMapSpecAngleScan.py', 
+                    '../../Scripts/mpiMapSpecAngleScan.py', 
+                    'Destroid Procgrid',
                     str(12)])

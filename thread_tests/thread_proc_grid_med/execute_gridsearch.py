@@ -10,5 +10,6 @@ for num_proc in proc_search_axis:
                         '-n', 
                         str(num_proc), 
                         'python', 
-                        '../Scripts/mpiMapSpecAngleScan.py', 
+                        '../../Scripts/mpiMapSpecAngleScan.py', 
+                        'Destroid Gridsearch',
                         str(num_thread)])
