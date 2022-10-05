@@ -22,3 +22,7 @@ def getImages(dataFile, startImage, numImages):
     with h5py.File(dataFile, 'r') as dataF:
         return np.asarray(dataF['entry/instrument/detector/data'][startImage:startImage+numImages,:,:])
 
+
+def getNumImages(dataFile):
+    with h5py.File(dataFile, 'r') as dataF:
+        return dataF['entry/instrument/detector/data'].shape[0]

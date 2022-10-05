@@ -232,7 +232,7 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
                             self.containsDark[scan] = DARK_STR in ccdPart.keys()
                             self.numberOfDarks[scan] = int(ccdPart[DARK_STR][0])
                             self.containsRoi[scan] = COUNTER_ROI_STR in ccdPart.keys()
-                            self.roi[scan] = map(int, ccdPart[COUNTER_ROI_STR])
+                            self.roi[scan] = list(map(int, ccdPart[COUNTER_ROI_STR]))
                             self.repeatsPoints[scan] = REPEAT_POINTS_STR in ccdPart.keys()
                             self.numberOfRepeatPoints[scan] = ccdPart[REPEAT_POINTS_STR]
                             
@@ -383,99 +383,142 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
                 'ccdscan' in curScan.CCD.keys():
                 darkImage = None
                 darksToSkip = 1
+                namePrefix = self.dataFilePrefix[scannr]
                 if self.containsDark[scannr]:
                     numDarks = self.numberOfDarks[scannr]
-                    namePrefix = self.dataFilePrefix[scannr]
-                    darkName = namePrefix + DARK_STR + \
+                    darkNameIMM = namePrefix + DARK_STR + \
                             ("_00001-%.5d" % numDarks) + \
                             IMM_STR[1:]
+
+                    darkNameH5 = namePrefix + DARK_STR + \
+                            ("%.4d" % numDarks) + \
+                            H5_STR[1:]
                     try:
-                        fp = open(darkName, 'rb')
-                        numImagesInFile = getNumberOfImages(fp)
-                        fp.close()
-                        if numImagesInFile < numDarks:
-                            raise RSMap3DException("dark file %s contains " + \
-                                                   "only %d images.  Spec " + \
-                                                   "file says there should " + \
-                                                   "be %d" % \
-                                                   (darkName, \
-                                                    numImagesInFile, \
-                                                    numDarks))
-                        imageStartIndex, dlen = \
-                            GetStartPositions(darkName, numDarks)
-                        images = OpenMultiImm(darkName, darksToSkip -1, \
-                                              numDarks - darksToSkip,
-                                              imageStartIndex, dlen)
+                        immFlag = True
+                        if os.path.exists(darkNameIMM):
+                            fp = open(darkNameIMM, 'rb')
+                            numImagesInFile = getNumberOfImages(fp)
+                            fp.close()
+                            if numImagesInFile < numDarks:
+                                raise RSMap3DException("dark file %s contains " + \
+                                                    "only %d images.  Spec " + \
+                                                    "file says there should " + \
+                                                    "be %d" % \
+                                                    (darkNameIMM, \
+                                                        numImagesInFile, \
+                                                        numDarks))
+                            imageStartIndex, dlen = \
+                                GetStartPositions(darkNameIMM, numDarks)
+                            images = OpenMultiImm(darkNameIMM, darksToSkip -1, \
+                                                numDarks - darksToSkip,
+                                                imageStartIndex, dlen)
+                        
+                        elif os.path.exists(darkNameH5):
+                            if xpcsH5r.getNumImages(darkNameH5) < numDarks:
+                                raise RSMap3DException("dark file %s contains " + \
+                                                    "only %d images.  Spec " + \
+                                                    "file says there should " + \
+                                                    "be %d" % \
+                                                    (darkNameIMM, \
+                                                        numImagesInFile, \
+                                                        numDarks))
+                            images = xpcsH5r.getImages(
+                                darkNameH5,
+                                darksToSkip - 1,
+                                numDarks - darksToSkip
+                            )
+
+                        else:
+                            self.containsDark[scannr] = False
+                            raise FileNotFoundError('Unable to find dark file')
+
                         darkImage = np.average(images, axis=0)                    
-                        
-                        
+
                     except Exception as ex:
                         logger.exception(ex)
                     # End reading dark Images
-                    # start reading sample images
-                    numScanPoints = len(curScan.data_lines)
-                    angles = self.getGeoAngles(curScan, angleNames)
-                    scanAngle1 = {}
-                    scanAngle2 = {}
-                    for i in range(len(angleNames)):
-                        scanAngle1[i] = angles[:,i]
-                        scanAngle2[i] = []
-                    arrayInitializedForScan = False
-                    if mask_was_none:
-                        mask = True * len(self.getImageToBeUsed()[scannr])
-                    mask1 = np.array(mask)
-                    logger.debug("mask1.shape %s" % str(mask1.shape))
-                    indexesToProcess = (np.where(mask1 == True))[0]
-                    logger.debug("indexesToProcess.shape %s" % str(indexesToProcess.shape))
-                    logger.debug("indexesToProcess %s" % str(indexesToProcess))
-                    
-                    foundIndex = 0
-                    minorProgressInc = self.progressInc/indexesToProcess.shape[0]
-                    minorProgress = self.progress
-                    for scanno in indexesToProcess:
-                        if self.progressUpdater is not None:
-                            self.progressUpdater(minorProgress, self.progressMax)
-                        minorProgress += minorProgressInc        
-                        fileName = namePrefix + \
-                                "%d_%.5d-%.5d" % (scanno, 1,1) + \
-                                IMM_STR[1:]
-                        logger.debug("Reading filename %s fileName" % fileName)
-                        imageStartIndex, dlen = GetStartPositions(fileName, \
-                                                                  1)
+                # start reading sample images
+                numScanPoints = len(curScan.data_lines)
+                angles = self.getGeoAngles(curScan, angleNames)
+                scanAngle1 = {}
+                scanAngle2 = {}
+                for i in range(len(angleNames)):
+                    scanAngle1[i] = angles[:,i]
+                    scanAngle2[i] = []
+                arrayInitializedForScan = False
+                if mask_was_none:
+                    mask = True * len(self.getImageToBeUsed()[scannr])
+                mask1 = np.array(mask)
+                logger.debug("mask1.shape %s" % str(mask1.shape))
+                indexesToProcess = (np.where(mask1 == True))[0]
+                logger.debug("indexesToProcess.shape %s" % str(indexesToProcess.shape))
+                logger.debug("indexesToProcess %s" % str(indexesToProcess))
+                
+                foundIndex = 0
+                minorProgressInc = self.progressInc/indexesToProcess.shape[0]
+                minorProgress = self.progress
+                for scanno in indexesToProcess:
+                    if self.progressUpdater is not None:
+                        self.progressUpdater(minorProgress, self.progressMax)
+                    minorProgress += minorProgressInc        
+
+                    fileNameIMM = namePrefix + \
+                            "%d_%.5d-%.5d" % (scanno, 1,1) + \
+                            IMM_STR[1:]
+
+                    fileNameH5 = namePrefix + \
+                            ("%.4d" % scanno) + \
+                            H5_STR[1:]
+                        
+                    if os.path.exists(fileNameIMM):
+                        logger.debug("Reading filename %s fileName" % fileNameIMM)
+                        imageStartIndex, dlen = GetStartPositions(fileNameIMM, \
+                                                                1)
                         # read single image from file with one image
                         startImage = 0
                         numImages = 1
-                        image = OpenMultiImm(fileName, startImage, \
-                                             numImages,
-                                             imageStartIndex, dlen)[0]
-                        if not arrayInitializedForScan:
-                            if not intensity.shape[0]:
-                                offset = 0
-                                intensity = np.zeros((indexesToProcess.shape[0],) + image.shape)
-                                arrayInitializedForScan = True
-                            else:
-                                offset = intensity.shape[0]
-                                intensity = np.concatenate((intensity, \
-                                                            (np.zeros((indexesToProcess.shape[0],) + image.shape))), \
-                                                           axis=0) 
-                        logger.debug("foundIndex %s" % foundIndex)
-                        logger.debug(" instensity.shape %s" % str(intensity.shape))
-                        logger.debug("image.shape %s" % str(image.shape))
-                        if self.containsDark[scannr]:
-                            intensity[foundIndex + offset,:, :] = image - darkImage
-                        else:
-                            intensity[foundIndex + offset,:, :] = image - darkImage
-                            
-                        for i in range(len(angleNames)):
-                            scanAngle2[i].append(scanAngle1[i][scanno])
-                        foundIndex += 1
-                    if len(scanAngle2[0]) > 0:
-                        for i in range(len(angleNames)):
-
-                            scanAngle[i] = np.concatenate((scanAngle[i], 
-                                                       np.array(scanAngle2[i])), 
-                                                       axis=0)  
+                        image = OpenMultiImm(fileNameIMM, startImage, \
+                                            numImages,
+                                            imageStartIndex, dlen)[0]
                     
+                    elif os.path.exists(fileNameH5):
+                        image = xpcsH5r.getImages(
+                            fileNameH5,
+                            0, 
+                            1
+                        )[0]
+                
+                    else:
+                        raise FileNotFoundError("Unable to find .imm or .h5 image!")
+
+                    if not arrayInitializedForScan:
+                        if not intensity.shape[0]:
+                            offset = 0
+                            intensity = np.zeros((indexesToProcess.shape[0],) + image.shape)
+                            arrayInitializedForScan = True
+                        else:
+                            offset = intensity.shape[0]
+                            intensity = np.concatenate((intensity, \
+                                                        (np.zeros((indexesToProcess.shape[0],) + image.shape))), \
+                                                        axis=0) 
+                    logger.debug("foundIndex %s" % foundIndex)
+                    logger.debug(" instensity.shape %s" % str(intensity.shape))
+                    logger.debug("image.shape %s" % str(image.shape))
+                    if self.containsDark[scannr]:
+                        intensity[foundIndex + offset,:, :] = image - darkImage
+                    else:
+                        intensity[foundIndex + offset,:, :] = image 
+                        
+                    for i in range(len(angleNames)):
+                        scanAngle2[i].append(scanAngle1[i][scanno])
+                    foundIndex += 1
+                if len(scanAngle2[0]) > 0:
+                    for i in range(len(angleNames)):
+
+                        scanAngle[i] = np.concatenate((scanAngle[i], 
+                                                    np.array(scanAngle2[i])), 
+                                                    axis=0)  
+                
             else:
                 immDataFile = self.immDataFileName[scannr]
                 dataDir = os.path.join(imageDir, immDataFile)
