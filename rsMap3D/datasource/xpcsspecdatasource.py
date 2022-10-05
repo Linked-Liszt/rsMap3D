@@ -21,6 +21,7 @@ import logging
 logger = logging.getLogger(__name__)
 import traceback
 
+import rsMap3D.utils.xpcsH5Reader as xpcsH5r
 from rsMap3D.exception.rsmap3dexception import ScanDataMissingException,\
     RSMap3DException
 from rsMap3D.datasource.Sector33SpecDataSource import IMAGE_DIR_MERGE_STR,\
@@ -31,6 +32,8 @@ from rsMap3D.mappers.abstractmapper import ProcessCanceledException
 
 IMAGES_STR = "images"
 IMM_STR = "*.imm"
+H5_STR = "*.h5"
+H5_META_STR = "*.hdf"
 XPCS_SCAN = 'xpcsscan'
 ASCAN = 'ascan'
 CCD_SCAN = 'ccdscan'
@@ -281,8 +284,8 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
                         logger.debug( "scan %s" % scan )
             if self.progressUpdater is not None:
                 self.progressUpdater(self.progressMax, self.progressMax)
-        except IOError:
-            raise IOError( "Cannot open file " + str(self.specFile))
+        except IOError as e:
+            raise e
 #         if len(self.getAvailableScans()) == 0:
 #             raise ScanDataMissingException("Could not find scan data for " + \
 #                                            "input file \n" + self.specFile + \
@@ -476,25 +479,39 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
             else:
                 immDataFile = self.immDataFileName[scannr]
                 dataDir = os.path.join(imageDir, immDataFile)
-                fullFileName = (glob.glob(os.path.join(dataDir, IMM_STR))[0]).replace('\\','\\\\').replace('/','\\\\')
-                fullFileName = (glob.glob(os.path.join(dataDir, IMM_STR))[0])
-                imageStartIndex = []
-                dlen = []
-                try:
-                    fp = open(fullFileName, "rb")
-                    numImages = getNumberOfImages(fp)
-                    fp.close()
-                    imageStartIndex, dlen = GetStartPositions(fullFileName, \
-                                                              numImages)
-                    fp = open(fullFileName, "rb")
-                    header = readHeader(fp, imageStartIndex[self.scanDataFile[immDataFile][scannr][0]])
-                    self.detectorROI = [header['row_beg'], header['row_end'],
-                         header['col_beg'], header['col_end']]
-                except IOError as ex:
-                    logger.error("Problem opening IMM file to get the start indexes" +
-                                  str(ex))
-                finally: 
-                    fp.close()
+                
+                immFlag = True
+                if len(glob.glob(os.path.join(dataDir, IMM_STR))) > 0:
+                    fullFileName = (glob.glob(os.path.join(dataDir, IMM_STR))[0]).replace('\\','\\\\').replace('/','\\\\')
+                    fullFileName = (glob.glob(os.path.join(dataDir, IMM_STR))[0])
+                    imageStartIndex = []
+                    dlen = []
+                    try:
+                        fp = open(fullFileName, "rb")
+                        numImages = getNumberOfImages(fp)
+                        fp.close()
+                        imageStartIndex, dlen = GetStartPositions(fullFileName, \
+                                                                numImages)
+                        fp = open(fullFileName, "rb")
+                        header = readHeader(fp, imageStartIndex[self.scanDataFile[immDataFile][scannr][0]])
+                        self.detectorROI = [header['row_beg'], header['row_end'],
+                            header['col_beg'], header['col_end']]
+                    except IOError as ex:
+                        logger.error("Problem opening IMM file to get the start indexes" +
+                                    str(ex))
+                    finally: 
+                        fp.close()
+
+                elif len(glob.glob(os.path.join(dataDir, H5_STR))) > 0:
+                    immFlag = False
+                    fullFileName = glob.glob(os.path.join(dataDir, H5_STR))[0]
+                    metaFileName = glob.glob(os.path.join(dataDir, H5_META_STR))[0]
+                    self.detectorROI = xpcsH5r.getDetectorROI(metaFileName)
+
+                else:
+                    logger.error("Unable to find data files.")
+                
+
                 if self.haltMap:
                     raise ProcessCanceledException("Process Canceled")
                 scan = self.sd.scans[str(scannr)]
@@ -517,12 +534,18 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
                 indexesToProcess = (np.where(mask1 == True))[0]
                 startIndex = indexesToProcess[0]
                 numberToProcess = len(indexesToProcess)
-                   
-                images = OpenMultiImm(fullFileName, \
-                                      imagesToSkip + startIndex - 1,
-                                      numberToProcess,
-                                      imageStartIndex,
-                                      dlen)
+
+                if immFlag:
+                    images = OpenMultiImm(fullFileName, \
+                                        imagesToSkip + startIndex - 1,
+                                        numberToProcess,
+                                        imageStartIndex,
+                                        dlen)
+                else:
+                    images = xpcsH5r.getImages(fullFileName,
+                                               imagesToSkip + startIndex - 1,
+                                               numberToProcess)
+
                 minorProgressInc = self.progressInc/indexesToProcess.shape[0]
                 minorProgress = self.progress
                 for ind in indexesToProcess:
