@@ -113,6 +113,30 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
         scan = self.sd.scans[str(scanNo)]
         numImages = len(scan.data_lines)
         return numImages
+    
+
+    def _checkCCDMismatch(self, scans, curScan, scanIdx):
+        """
+        In certain spec files, the CCD component of the scan 
+        was placed in the previous scan. This function searches
+        for this mismatch and automatically corrects it. 
+        """
+        if scanIdx == 0:
+            return curScan
+
+        curScanID = int(curScan.S.split(' ')[0])
+        
+        prevScan = scans[str(scanIdx - 1)]
+        if prevScan.CCD != None and \
+            'ccdscan' in prevScan.CCD.keys():
+            
+            ccdScanID = int(prevScan.CCD['ccdscan'][0])
+
+            if ccdScanID == curScanID:
+                curScan.CCD = prevScan.CCD
+
+        return curScan
+
         
     def loadSource(self, mapHKL=False):
         logger.debug(METHOD_ENTER_STR)
@@ -165,6 +189,7 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
 #                                             SCAN_NUMBER_MERGE_STR % scan))):
                     curScan = self.sd.scans[str(scan)]
                     curScan.interpret()
+                    self._checkCCDMismatch(self.sd.scans, curScan, scan)
                     logger.debug( "scan: %s" % scan)
 #                     if int(scan) > 1:
 #                         lastScan = self.sd.scans[str(int(scan)-1)]
@@ -435,6 +460,7 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
                         darkImage = np.average(images, axis=0)                    
 
                     except Exception as ex:
+                        print(ex)
                         logger.exception(ex)
                     # End reading dark Images
                 # start reading sample images
@@ -489,7 +515,7 @@ class XPCSSpecDataSource(SpecXMLDrivenDataSource):
                         )[0]
                 
                     else:
-                        raise FileNotFoundError("Unable to find .imm or .h5 image!")
+                        raise FileNotFoundError(f"Unable to find .imm or .h5 image! {fileNameIMM}")
 
                     if not arrayInitializedForScan:
                         if not intensity.shape[0]:
