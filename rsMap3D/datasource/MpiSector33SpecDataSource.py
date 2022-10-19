@@ -291,6 +291,10 @@ class MPISector33SpecDataSource(SpecXMLDrivenDataSource):
                 scanWin.Put([self.mpiComm.size.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
                 scanWin.Unlock(rank=0)
             
+            othersLoad = False
+            if scanIdx >= len(self.scans):
+                othersLoad = True
+
             self.mpiComm.Barrier()
 
 
@@ -343,7 +347,7 @@ class MPISector33SpecDataSource(SpecXMLDrivenDataSource):
 
         except IOError:
             raise IOError( "Cannot open file " + str(self.specFile))
-        if len(self.getAvailableScans()) == 0:
+        if len(self.getAvailableScans()) == 0 and not othersLoad:
             raise ScanDataMissingException("Could not find scan data for " + \
                                            "input file \n" + self.specFile + \
                                            "\nOne possible reason for this " + \

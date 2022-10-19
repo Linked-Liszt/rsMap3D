@@ -98,7 +98,7 @@ class MPIQGridMapper(AbstractGridMapper):
         if self.mpiRank == 0:
             print(f'Calculated {len(scanSplits)} splits.')
         if self.mpiComm.Get_size() > len(scanSplits):
-            raise ValueError(f"Less Scan Splits ({len(scanSplits)} than ranks {self.mpiComm.Get_size()}! Reduce num procs.")
+            raise ValueError(f"Less Scan Splits ({len(scanSplits)}) than ranks ({self.mpiComm.Get_size()})! Reduce num procs.")
 
         if self.mpiRank == 0:
             scanWinSize = SCAN_WIN_SIZE

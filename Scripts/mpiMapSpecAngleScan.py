@@ -62,10 +62,6 @@ projectDir = config["project_dir"]
 specFile = config["spec_file"]
 scanRange = srange(config["scan_range"]).list()
 
-if len(scanRange) < mpiComm.Get_size():
-    raise ValueError("Too many processes! Reduce proc count to <= number of scans.")
-
-
 
 #
 #Change values listed here for a particular experiment
