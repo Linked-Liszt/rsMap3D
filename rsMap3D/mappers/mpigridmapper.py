@@ -3,6 +3,7 @@
  See LICENSE file.
 '''
 
+from re import S
 import time
 from xml.dom.expatbuilder import InternalSubsetExtractor
 import xrayutilities as xu
@@ -81,9 +82,23 @@ class MPIQGridMapper(AbstractGridMapper):
                               True)
                               
         imageToBeUsed = self.dataSource.getImageToBeUsed()
-        
 
-        scans = self.dataSource.getAvailableScans()
+        scanSplits = []
+        for scan in self.dataSource.getAvailableScans():
+            if True in imageToBeUsed[scan]:
+                imageSize = self.dataSource.getDetectorDimensions()[0] * \
+                            self.dataSource.getDetectorDimensions()[1]
+                numImages = len(imageToBeUsed[scan])
+                if imageSize*4*numImages <= maxImageMem:
+                    scanSplits.append([scan, True, -1])
+                else:
+                    nPasses = int(imageSize*4*numImages/ maxImageMem + 1)
+                    for thisPass in range(nPasses):
+                        scanSplits.append([scan, False, thisPass])
+        if self.mpiRank == 0:
+            print(f'Calculated {len(scanSplits)} splits.')
+        if self.mpiComm.Get_size() > len(scanSplits):
+            raise ValueError(f"Less Scan Splits ({len(scanSplits)} than ranks {self.mpiComm.Get_size()}! Reduce num procs.")
 
         if self.mpiRank == 0:
             scanWinSize = SCAN_WIN_SIZE
@@ -92,27 +107,23 @@ class MPIQGridMapper(AbstractGridMapper):
         
         scanWin = MPI.Win.Allocate(scanWinSize, comm=self.mpiComm)
 
-        scanIdx = self.mpiRank
+        scanSplitIdx = self.mpiRank
         if self.mpiRank == 0:
             scanWin.Lock(rank=0)
             scanWin.Put([self.mpiComm.size.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
             scanWin.Unlock(rank=0)
         
         self.mpiComm.Barrier()
-        print(f'Proc {self.mpiRank} Beginning Gridding {scanIdx+1}/{len(scans)}')
-        while scanIdx < len(scans):
-            scan = scans[scanIdx]
+        print(f'Proc {self.mpiRank} Beginning Gridding {scanSplitIdx+1}/{len(scanSplits)}')
+        while scanSplitIdx < len(scanSplits):
+            scan = scanSplits[scanSplitIdx][0]
 
-            if True in imageToBeUsed[scan]:
-                imageSize = self.dataSource.getDetectorDimensions()[0] * \
-                            self.dataSource.getDetectorDimensions()[1]
-                numImages = len(imageToBeUsed[scan])
-                if imageSize*4*numImages <= maxImageMem:
+            if True in imageToBeUsed[scan]: # Within single mem
+                if scanSplits[scanSplitIdx][1]:
                     kwargs['mask'] = imageToBeUsed[scan]
                     qx, qy, qz, intensity = self.dataSource.rawmap((scan,), **kwargs)
 
                     try:
-                        
                         gridder(qx, qy, qz, intensity)
                 
                     except InputError as ex:
@@ -125,39 +136,40 @@ class MPIQGridMapper(AbstractGridMapper):
 
                     
                 else:
-                    nPasses = int(imageSize*4*numImages/ maxImageMem + 1)
-                    for thisPass in range(nPasses):
-                        imageToBeUsedInPass = np.array(imageToBeUsed[scan])
-                        imageToBeUsedInPass[:int(thisPass*numImages/nPasses)] = False
-                        imageToBeUsedInPass[int((thisPass+1)*numImages/nPasses):] = False
-                        
-                        if True in imageToBeUsedInPass:
-                            kwargs['mask'] = imageToBeUsedInPass
-                            qx, qy, qz, intensity = \
-                                self.dataSource.rawmap((scan,), **kwargs)
-                            # convert data to rectangular grid in reciprocal space
-                            try:
-                                
-                                gridder(qx, qy, qz, intensity)
-                        
-                            except InputError as ex:
-                                print ("Wrong Input to gridder")
-                                print ("qx Size: " + str( qx.shape))
-                                print ("qy Size: " + str( qy.shape))
-                                print ("qz Size: " + str( qz.shape))
-                                print ("intensity Size: " + str(intensity.shape))
-                                raise InputError(ex)
+                    numImages = len(imageToBeUsed[scan])
+                    thisPass = scanSplits[scanSplitIdx][2]
+                    
+                    imageToBeUsedInPass = np.array(imageToBeUsed[scan])
+                    imageToBeUsedInPass[:int(thisPass*numImages/nPasses)] = False
+                    imageToBeUsedInPass[int((thisPass+1)*numImages/nPasses):] = False
+                    
+                    if True in imageToBeUsedInPass:
+                        kwargs['mask'] = imageToBeUsedInPass
+                        qx, qy, qz, intensity = \
+                            self.dataSource.rawmap((scan,), **kwargs)
+                        # convert data to rectangular grid in reciprocal space
+                        try:
+                            
+                            gridder(qx, qy, qz, intensity)
+                    
+                        except InputError as ex:
+                            print ("Wrong Input to gridder")
+                            print ("qx Size: " + str( qx.shape))
+                            print ("qy Size: " + str( qy.shape))
+                            print ("qz Size: " + str( qz.shape))
+                            print ("intensity Size: " + str(intensity.shape))
+                            raise InputError(ex)
                         
             scanBuff = bytearray(SCAN_WIN_SIZE)
             scanWin.Lock(rank=0)
             scanWin.Get([scanBuff, MPI.BYTE], target_rank=0)
-            scanIdx = int.from_bytes(scanBuff, 'little')
-            if scanIdx < len(scans):
-                print(f'Proc {self.mpiRank} Gridding {scanIdx+1}/{len(scans)}')
+            scanSplitIdx = int.from_bytes(scanBuff, 'little')
+            if scanSplitIdx < len(scanSplits):
+                print(f'Proc {self.mpiRank} Gridding {scanSplitIdx+1}/{len(scanSplits)}')
             else:
                 print(f'Proc {self.mpiRank} finished grid. Beginning merge.')
 
-            scanNext = scanIdx + 1
+            scanNext = scanSplitIdx + 1
             scanWin.Put([scanNext.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
             scanWin.Unlock(rank=0)
 
