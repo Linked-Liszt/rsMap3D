@@ -4,6 +4,7 @@
 '''
 import os
 import numpy as np
+import math
 from rsMap3D.exception.rsmap3dexception import RSMap3DException
 from rsMap3D.transforms.unitytransform3d import UnityTransform3D
 from xrayutilities.gridder import Gridder1D
