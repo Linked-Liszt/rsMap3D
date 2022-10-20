@@ -17,7 +17,7 @@ Y_SCALING_OPTIONS  = ["Linear","log"]
 
 SCAN_WIN_SIZE = 4
 
-class PowderScanMapper():
+class MPIPowderScanMapper():
     '''
     This mapper takes data from a general diffraction scan and maps 
     the data as Intensity vs q or intensity vs 2-theta.  This outputs
