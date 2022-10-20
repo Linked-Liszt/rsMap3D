@@ -44,6 +44,7 @@ class MPIPowderScanMapper():
         self.appConfig = None
         self.progressUpdater = None
         self.mpiComm = mpiComm
+        self.mpiRank = mpiComm.Get_rank()
         if transform is None:
             self.transform = UnityTransform3D()
         else:
