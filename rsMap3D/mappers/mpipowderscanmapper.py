@@ -8,12 +8,14 @@ from rsMap3D.exception.rsmap3dexception import RSMap3DException
 from rsMap3D.transforms.unitytransform3d import UnityTransform3D
 from xrayutilities.gridder import Gridder1D
 import logging
+from mpi4py import MPI
 from rsMap3D.gui.rsm3dcommonstrings import EMPTY_STR
 from rsMap3D.config.rsmap3dlogging import METHOD_ENTER_STR
 logger = logging.getLogger(__name__)
 X_COORD_OPTIONS = ["tth", "q"]
 Y_SCALING_OPTIONS  = ["Linear","log"]
 
+SCAN_WIN_SIZE = 4
 
 class PowderScanMapper():
     '''
@@ -24,6 +26,7 @@ class PowderScanMapper():
     def __init__(self,
                  dataSource,
                  outputFileName,
+                 mpiComm,
                  transform = None,
                  gridWriter = None,
                  appConfig = None,
@@ -40,6 +43,7 @@ class PowderScanMapper():
         self.gridWriter = gridWriter
         self.appConfig = None
         self.progressUpdater = None
+        self.mpiComm = mpiComm
         if transform is None:
             self.transform = UnityTransform3D()
         else:
@@ -67,10 +71,10 @@ class PowderScanMapper():
             self.currentMapScans = [scan,]
             x, y, e = self.processMap()
 
-            self.gridWriter.setData(x, y, e)
-            self.gridWriter.setFileInfo(self.getFileInfo())
-            self.gridWriter.write()
-            
+            if self.mpiRank == 0:
+                self.gridWriter.setData(x, y, e)
+                self.gridWriter.setFileInfo(self.getFileInfo())
+                self.gridWriter.write()
         
         
     def getFileInfo(self):
@@ -172,11 +176,42 @@ class PowderScanMapper():
 
         imageToBeUsed = self.dataSource.getImageToBeUsed()
         imageSize = np.prod(self.dataSource.getDetectorDimensions())
+        scanSplits = []
         for scan in self.currentMapScans:
+            numImages = len(imageToBeUsed[scan])
+            if imageSize*4*numImages <= maxImageMem:
+                scanSplits.append([scan, True, -1])
+            else:
+                nPasses = int(imageSize*4*numImages/ maxImageMem + 1)
+                for thisPass in range(nPasses):
+                    scanSplits.append([scan, False, thisPass])
+        if self.mpiRank == 0:
+            print(f'Calculated {len(scanSplits)} splits.')
+        if self.mpiComm.Get_size() > len(scanSplits):
+            raise ValueError(f"Less Scan Splits ({len(scanSplits)}) than ranks ({self.mpiComm.Get_size()})! Reduce num procs.")
+
+        if self.mpiRank == 0:
+            scanWinSize = SCAN_WIN_SIZE
+        else:
+            scanWinSize = 0
+        
+        scanWin = MPI.Win.Allocate(scanWinSize, comm=self.mpiComm)
+
+        scanSplitIdx = self.mpiRank
+        if self.mpiRank == 0:
+            scanWin.Lock(rank=0)
+            scanWin.Put([self.mpiComm.size.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
+            scanWin.Unlock(rank=0)
+        
+        self.mpiComm.Barrier()
+        print(f'Proc {self.mpiRank} Beginning Gridding {scanSplitIdx+1}/{len(scanSplits)}')
+        while scanSplitIdx < len(scanSplits):
+            scan = scanSplits[scanSplitIdx][0]
+
             wavelen = 12398.41290/self.dataSource.getIncidentEnergy()[scan]
             logger.info("Scan Number %s" % scan)
             numImages = len(imageToBeUsed[scan])
-            if imageSize * 4 * numImages <= maxImageMem:
+            if scanSplits[scanSplitIdx][1]:
                 logger.info("Only 1 pass required")
                 qx, qy, qz, intensity = self.dataSource.rawmap((scan,),
                                                    mask = imageToBeUsed[scan])
@@ -188,29 +223,80 @@ class PowderScanMapper():
                     coordsX = Q
                 gridder(np.ravel(coordsX), np.ravel(intensity))
             else:
-                nPasses = np.int(np.floor(imageSize*4*numImages/maxImageMem)+1)
-                for thisPass in range(nPasses):
-                    logger.info("Pass Number %d of %d" % \
-                                (thisPass+1, nPasses))
-                    imageToBeUsedInPass = np.array(imageToBeUsed[scan])
-                    imageToBeUsedInPass[:int(thisPass*numImages/nPasses)] = \
-                        False
-                    imageToBeUsedInPass[int((thisPass+1)*numImages/nPasses):] = False
-                    qx, qy, qz, intensity = self.dataSource.rawMap((scan,), \
-                                                       mask=imageToBeUsedInPass)
-                    Q = np.sqrt(qx**2 + qy**2 + qz**2)
-                    coordsX
-                    if self.dataCoord == X_COORD_OPTIONS[0]:
-                        coordsX = np.rad2deg(np.arcsin((Q*wavelen)/
-                                                     (4.0*np.pi))*2.0)
-                    else:
-                        coordsX = Q
-                    gridder(np.ravel(coordsX), np.ravel(intensity))
+                thisPass = scanSplits[scanSplitIdx][2]
+                logger.info("Pass Number %d of %d" % \
+                            (thisPass+1, nPasses))
+                imageToBeUsedInPass = np.array(imageToBeUsed[scan])
+                imageToBeUsedInPass[:int(thisPass*numImages/nPasses)] = \
+                    False
+                imageToBeUsedInPass[int((thisPass+1)*numImages/nPasses):] = False
+                qx, qy, qz, intensity = self.dataSource.rawMap((scan,), \
+                                                    mask=imageToBeUsedInPass)
+                Q = np.sqrt(qx**2 + qy**2 + qz**2)
+                coordsX
+                if self.dataCoord == X_COORD_OPTIONS[0]:
+                    coordsX = np.rad2deg(np.arcsin((Q*wavelen)/
+                                                    (4.0*np.pi))*2.0)
+                else:
+                    coordsX = Q
+                gridder(np.ravel(coordsX), np.ravel(intensity))
+
+            scanBuff = bytearray(SCAN_WIN_SIZE)
+            scanWin.Lock(rank=0)
+            scanWin.Get([scanBuff, MPI.BYTE], target_rank=0)
+            scanSplitIdx = int.from_bytes(scanBuff, 'little')
+            if scanSplitIdx < len(scanSplits):
+                print(f'Proc {self.mpiRank} Gridding {scanSplitIdx+1}/{len(scanSplits)}')
+            else:
+                print(f'Proc {self.mpiRank} finished grid. Beginning merge.')
+
+            scanNext = scanSplitIdx + 1
+            scanWin.Put([scanNext.to_bytes(SCAN_WIN_SIZE, 'little'), MPI.BYTE], target_rank=0)
+            scanWin.Unlock(rank=0)
+        
+        gridder = self.mergeGridders(gridder)
+        self.mpiComm.Barrier()
+
         err = np.where(gridder._gnorm > 0.0, 
                        np.sqrt(gridder._gdata)/gridder._gnorm, 0.0)
 
         return gridder.xaxis, gridder.data, err
     
+
+    def mergeGridders(self, gridder):
+        """
+        Merges gridders, combining their grids till all data is collated at proc 0. 
+        Similar to the upward execution of a distributed merge-sort. 
+        """
+        worldSize = self.mpiComm.Get_size()
+
+        depth = math.floor(np.log2(worldSize)) + 1
+        for currDepth in range(depth):
+
+            # Exclude procs that have merged
+            if self.mpiRank % (2**currDepth) != 0:
+                break
+
+            # Determine if sending or receiving
+            if (self.mpiRank / (2**currDepth)) % 2 == 0:
+                source = self.mpiRank + (2**currDepth)
+
+                # Odd # world size
+                if source >= worldSize:
+                    continue
+
+                incomingGrid = self.mpiComm.recv(source=source)
+                # Normalization must be OFF and range must be FIXED for this to work
+                # These are the defaults as of the current version of xu (1.7.3)
+                gridder._gdata += incomingGrid._gdata
+                gridder._gnorm += incomingGrid._gnorm
+            
+            else:
+                dest = self.mpiRank - (2 ** currDepth)
+                self.mpiComm.send(gridder, dest=dest)
+        return gridder
+
+
     def setProgressUpdater(self, updater):
         '''
         Set the updater that will be used to maintain the progress bar 

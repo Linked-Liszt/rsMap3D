@@ -81,7 +81,7 @@ Operations like :code:`dataSource.loadSource()` and :code:`gridMapper.doMap()` a
 Sharp Edges
 -----------
 
-A major sharp edge is :code:`num scans >= num cores`. If a run only uses 10 scans, no more than 10 cores may be applied. Therefore this parallelization only improves larger runs. The :code:`Scripts/mpiMapSpecAngleScan.py` script checks for this and raises an error if otherwise. It's highly recommended that your scripts do the same. 
+A major sharp edge is the maximum number of processes that can be effectively applied. In the MPIGridMapper, this is the total cumulative subscans of all scans. In the powdermapper, this is the number of subscans in an individual scan. The number of subscans is determined by the size of an image, the total number of images, and the max allowed memory as defined in the .ini. This number is computed and displayed right before gridding begins. If there are too many processes , the program will raise a error. If unsure how many to use, do a dry run and observe how many subscans the program computes. Alternatively, set the num processes to the highest allowable, and observe the error printout and adjust to the max number of proces allowable. 
 
 Parallelization also introduces sharp edges related to the gridder and loading of data. 
 
